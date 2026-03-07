@@ -1,6 +1,25 @@
 import re
+from collections import defaultdict
 
 from math_verify import parse, verify
+
+
+class DifficultyRewardTracker:
+    def __init__(self):
+        self._rewards_by_level: dict[int, list[float]] = defaultdict(list)
+
+    def update(self, difficulties: list[int] | tuple[int, ...], rewards: list[float]):
+        for difficulty, reward in zip(difficulties, rewards):
+            try:
+                level = int(difficulty)
+            except (TypeError, ValueError):
+                continue
+            self._rewards_by_level[level].append(float(reward))
+
+    def pop(self) -> dict[int, list[float]]:
+        snapshot = {level: values[:] for level, values in self._rewards_by_level.items()}
+        self._rewards_by_level.clear()
+        return snapshot
 
 
 def extract_boxed(text: str) -> str | None:
@@ -35,7 +54,11 @@ def check_answer(completion: str, ground_truth: str) -> float:
         return 1.0 if predicted.strip() == ground_truth.strip() else 0.0
 
 
-def make_reward_fn(answer_key: str = "solution"):
+def make_reward_fn(
+    answer_key: str = "solution",
+    difficulty_key: str = "difficulty",
+    reward_tracker: DifficultyRewardTracker | None = None,
+):
     def reward_fn(completions: list[list[dict]], **kwargs) -> list[float]:
         solutions = kwargs[answer_key]
         rewards = []
@@ -43,6 +66,13 @@ def make_reward_fn(answer_key: str = "solution"):
             # completion_msgs is a list of message dicts; take the assistant content
             text = completion_msgs[-1]["content"] if completion_msgs else ""
             rewards.append(check_answer(text, solution))
+        if reward_tracker:
+            difficulties = kwargs.get(difficulty_key, [])
+            if isinstance(difficulties, tuple):
+                difficulties = list(difficulties)
+            elif not isinstance(difficulties, list):
+                difficulties = [difficulties] * len(rewards)
+            reward_tracker.update(difficulties, rewards)
         return rewards
 
     return reward_fn
