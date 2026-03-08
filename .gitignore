@@ -1,6 +1,7 @@
 .DS_Store
 __pycache__/
 .python-version
+*.pdf
 
 # uv
 .venv/
@@ -10,3 +11,5 @@ venv/
 docs/
 
 scripts/
+
+analysis/

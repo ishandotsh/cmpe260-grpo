@@ -46,12 +46,17 @@ def check_answer(completion: str, ground_truth: str) -> float:
     predicted = extract_boxed(completion)
     if predicted is None:
         return 0.0
+
+    target = extract_boxed(ground_truth)
+    if target is None:
+        target = ground_truth
+
     try:
         parsed_pred = parse(predicted)
-        parsed_gt = parse(ground_truth)
+        parsed_gt = parse(target)
         return 1.0 if verify(parsed_pred, parsed_gt) else 0.0
     except Exception:
-        return 1.0 if predicted.strip() == ground_truth.strip() else 0.0
+        return 1.0 if predicted.strip() == target.strip() else 0.0
 
 
 def make_reward_fn(
