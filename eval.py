@@ -16,6 +16,20 @@ from reporting import build_accuracy_summary, get_git_commit_hash, write_json
 from reward import check_answer
 
 
+def _resolve_torch_dtype(dtype_name: str):
+    dtype_name = dtype_name.lower()
+    if dtype_name == "auto":
+        return "auto"
+    mapping = {
+        "bfloat16": torch.bfloat16,
+        "float16": torch.float16,
+        "float32": torch.float32,
+    }
+    if dtype_name not in mapping:
+        raise ValueError(f"Unsupported torch dtype: {dtype_name}")
+    return mapping[dtype_name]
+
+
 def generate_completion(model, tokenizer, messages, max_new_tokens, temperature):
     if hasattr(tokenizer, "apply_chat_template"):
         prompt_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
@@ -64,14 +78,22 @@ def _score_checkpoint(
     eval_examples,
     max_new_tokens,
     temperature,
+    torch_dtype,
+    attn_implementation,
+    trust_remote_code,
 ):
     model = AutoModelForCausalLM.from_pretrained(
         str(checkpoint_path),
-        torch_dtype="auto",
+        torch_dtype=torch_dtype,
         device_map="auto",
-        attn_implementation="sdpa",
+        attn_implementation=attn_implementation,
+        trust_remote_code=trust_remote_code,
     )
-    tokenizer = AutoTokenizer.from_pretrained(str(checkpoint_path), padding_side="left")
+    tokenizer = AutoTokenizer.from_pretrained(
+        str(checkpoint_path),
+        padding_side="left",
+        trust_remote_code=trust_remote_code,
+    )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -108,6 +130,9 @@ def select_checkpoint(
     selection_max_new_tokens,
     temperature,
     selection_last_k,
+    torch_dtype,
+    attn_implementation,
+    trust_remote_code,
 ):
     checkpoints = _find_checkpoints(checkpoint_root)
     if not checkpoints:
@@ -135,6 +160,9 @@ def select_checkpoint(
             eval_examples=selection_examples,
             max_new_tokens=selection_max_new_tokens,
             temperature=temperature,
+            torch_dtype=torch_dtype,
+            attn_implementation=attn_implementation,
+            trust_remote_code=trust_remote_code,
         )
         scored.append({"checkpoint": str(checkpoint.resolve()), "step": step, "accuracy": accuracy})
         if accuracy > best_accuracy or (accuracy == best_accuracy and step > _checkpoint_step(best_checkpoint)):
@@ -174,6 +202,14 @@ def main():
     parser.add_argument("--max_new_tokens", type=int, default=512)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument(
+        "--torch_dtype",
+        choices=["auto", "bfloat16", "float16", "float32"],
+        default="auto",
+        help="Torch dtype used when loading the model",
+    )
+    parser.add_argument("--attn_implementation", type=str, default="sdpa")
+    parser.add_argument("--trust_remote_code", action="store_true")
+    parser.add_argument(
         "--qualitative_samples",
         type=int,
         default=20,
@@ -183,6 +219,7 @@ def main():
     parser.add_argument("--wandb_project", type=str, default=WANDB_PROJECT)
     parser.add_argument("--disable_wandb", action="store_true")
     args = parser.parse_args()
+    resolved_torch_dtype = _resolve_torch_dtype(args.torch_dtype)
 
     torch.manual_seed(args.seed)
 
@@ -227,6 +264,9 @@ def main():
             selection_max_new_tokens=args.checkpoint_selection_max_new_tokens,
             temperature=args.temperature,
             selection_last_k=args.checkpoint_selection_last_k,
+            torch_dtype=resolved_torch_dtype,
+            attn_implementation=args.attn_implementation,
+            trust_remote_code=args.trust_remote_code,
         )
         if selected_checkpoint is None:
             if args.checkpoint_select == "step":
@@ -241,11 +281,16 @@ def main():
 
     model = AutoModelForCausalLM.from_pretrained(
         args.model_path,
-        torch_dtype="auto",
+        torch_dtype=resolved_torch_dtype,
         device_map="auto",
-        attn_implementation="sdpa",
+        attn_implementation=args.attn_implementation,
+        trust_remote_code=args.trust_remote_code,
     )
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path, padding_side="left")
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model_path,
+        padding_side="left",
+        trust_remote_code=args.trust_remote_code,
+    )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -303,6 +348,8 @@ def main():
             "num_samples": len(records),
             "max_new_tokens": args.max_new_tokens,
             "temperature": args.temperature,
+            "torch_dtype": args.torch_dtype,
+            "attn_implementation": args.attn_implementation,
         },
         "metrics": metrics,
         "qualitative_samples": qualitative,

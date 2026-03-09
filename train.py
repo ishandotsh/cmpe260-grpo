@@ -56,6 +56,20 @@ class DifficultyRewardCallback(TrainerCallback):
             wandb.log(wandb_payload, step=state.global_step)
 
 
+def _resolve_torch_dtype(dtype_name: str):
+    dtype_name = dtype_name.lower()
+    if dtype_name == "auto":
+        return "auto"
+    mapping = {
+        "bfloat16": torch.bfloat16,
+        "float16": torch.float16,
+        "float32": torch.float32,
+    }
+    if dtype_name not in mapping:
+        raise ValueError(f"Unsupported torch dtype: {dtype_name}")
+    return mapping[dtype_name]
+
+
 def main():
     parser = argparse.ArgumentParser(description="GRPO training with difficulty-based sampling")
     parser.add_argument(
@@ -72,6 +86,22 @@ def main():
     parser.add_argument("--wandb_project", type=str, default=WANDB_PROJECT)
     parser.add_argument("--log_every", type=int, default=50, help="Log reward stats every N train steps")
     parser.add_argument("--max_steps", type=int, default=-1, help="Override max training steps (-1 = full epochs)")
+    parser.add_argument(
+        "--num_generations",
+        type=int,
+        default=None,
+        help="Override GRPO num_generations (lower can reduce memory for larger models)",
+    )
+    parser.add_argument(
+        "--torch_dtype",
+        choices=["auto", "bfloat16", "float16", "float32"],
+        default="auto",
+        help="Torch dtype used when loading the model",
+    )
+    parser.add_argument("--attn_implementation", type=str, default="sdpa")
+    parser.add_argument("--trust_remote_code", action="store_true")
+    parser.add_argument("--gradient_checkpointing", action="store_true")
+    parser.add_argument("--disable_wandb", action="store_true")
     parser.add_argument(
         "--min_steps_before_eval",
         type=int,
@@ -116,6 +146,8 @@ def main():
         wandb_project=args.wandb_project,
         max_steps=args.max_steps,
         run_name=run_name,
+        num_generations=args.num_generations,
+        report_to="none" if args.disable_wandb else "wandb",
     )
 
     run_metadata = {
@@ -124,6 +156,11 @@ def main():
         "sampling": args.sampling,
         "seed": grpo_config.seed,
         "model_name": args.model_name,
+        "torch_dtype": args.torch_dtype,
+        "attn_implementation": args.attn_implementation,
+        "gradient_checkpointing": args.gradient_checkpointing,
+        "num_generations": grpo_config.num_generations,
+        "wandb_enabled": not args.disable_wandb,
         "checkpoint_path": str(checkpoint_dir.resolve()),
         "eval_dir": str(run_paths["eval_dir"].resolve()),
         "analysis_dir": str(run_paths["analysis_dir"].resolve()),
@@ -134,20 +171,33 @@ def main():
     print(f"Saved run metadata to {metadata_path}")
 
     # ---- W&B ----
-    os.environ.setdefault("WANDB_PROJECT", args.wandb_project)
-    if wandb.run is None:
-        wandb.init(project=args.wandb_project, name=grpo_config.run_name, config=run_metadata)
-    else:
-        wandb.config.update(run_metadata, allow_val_change=True)
+    if not args.disable_wandb:
+        os.environ.setdefault("WANDB_PROJECT", args.wandb_project)
+        if wandb.run is None:
+            wandb.init(project=args.wandb_project, name=grpo_config.run_name, config=run_metadata)
+        else:
+            wandb.config.update(run_metadata, allow_val_change=True)
 
     # ---- Model ----
-    model = AutoModelForCausalLM.from_pretrained(
+    model_kwargs = {
+        "torch_dtype": _resolve_torch_dtype(args.torch_dtype),
+        "attn_implementation": args.attn_implementation,
+        "trust_remote_code": args.trust_remote_code,
+    }
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    if world_size == 1:
+        model_kwargs["device_map"] = "auto"
+    model = AutoModelForCausalLM.from_pretrained(args.model_name, **model_kwargs)
+    if args.gradient_checkpointing:
+        if hasattr(model, "gradient_checkpointing_enable"):
+            model.gradient_checkpointing_enable()
+        if hasattr(model.config, "use_cache"):
+            model.config.use_cache = False
+    tokenizer = AutoTokenizer.from_pretrained(
         args.model_name,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
-        attn_implementation="sdpa",
+        padding_side="left",
+        trust_remote_code=args.trust_remote_code,
     )
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name, padding_side="left")
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 

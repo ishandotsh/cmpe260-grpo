@@ -8,6 +8,16 @@ uv run python train.py --sampling random --run_tag baseline
 uv run python train.py --sampling stratified --run_tag baseline
 ```
 
+You can override model/runtime settings at launch time (useful for HPC):
+
+```bash
+--model_name Qwen/Qwen2.5-7B-Instruct
+--torch_dtype bfloat16
+--num_generations 2
+--gradient_checkpointing
+--disable_wandb
+```
+
 By default each training run is saved under:
 
 ```text
@@ -39,6 +49,59 @@ Useful options:
 --checkpoint_selection_samples 25
 --checkpoint_selection_last_k 5
 ```
+
+Eval supports the same model-loading controls:
+
+```bash
+--torch_dtype auto|bfloat16|float16|float32
+--attn_implementation sdpa
+--trust_remote_code
+```
+
+## HPC Example (Larger Model)
+
+```bash
+uv run python train.py \
+  --sampling stratified \
+  --model_name Qwen/Qwen2.5-7B-Instruct \
+  --torch_dtype auto \
+  --num_generations 2 \
+  --gradient_checkpointing \
+  --disable_wandb \
+  --run_tag hpc-7b
+```
+
+```bash
+uv run python eval.py \
+  --run_dir ./experiments/<run_name> \
+  --sampling stratified \
+  --torch_dtype auto \
+  --attn_implementation sdpa \
+  --disable_wandb
+```
+
+See detailed change notes in [`docs/project-current-state.md`](docs/project-current-state.md).
+
+## SJSU HPC Notes (CMPE)
+
+Use the cluster scheduler (Slurm) for training/eval jobs instead of running long jobs directly on login nodes.
+
+Interactive GPU shell example:
+
+```bash
+srun -p gpu --gres=gpu --time=24:00:00 --pty /bin/bash
+```
+
+Then inside the allocated shell:
+
+```bash
+module load python3
+cd /absolute/path/to/cmpe260-grpo
+uv run python train.py --sampling stratified --model_name Qwen/Qwen2.5-7B-Instruct --torch_dtype auto --num_generations 2 --gradient_checkpointing --disable_wandb
+```
+
+If you are placed on A100/H100, prefer `--torch_dtype bfloat16`. For broader compatibility across mixed GPU nodes, keep `--torch_dtype auto` (or use `float16` on older GPUs).
+The SJSU page also notes a default job time limit, so set `--time` explicitly for longer runs.
 
 ## Analysis In Experiments Folder
 

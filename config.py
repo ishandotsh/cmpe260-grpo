@@ -21,6 +21,8 @@ def get_grpo_config(
     wandb_project: str | None = None,
     max_steps: int = -1,
     run_name: str | None = None,
+    num_generations: int | None = None,
+    report_to: str = "wandb",
 ) -> GRPOConfig:
     if run_name is None:
         run_name = f"grpo-{sampling}"
@@ -28,13 +30,15 @@ def get_grpo_config(
         output_dir = f"./output-{sampling}"
     if wandb_project is None:
         wandb_project = WANDB_PROJECT
+    if num_generations is None:
+        num_generations = 4
 
     return GRPOConfig(
         output_dir=output_dir,
         run_name=run_name,
         per_device_train_batch_size=1,
         gradient_accumulation_steps=8,
-        num_generations=4,
+        num_generations=num_generations,
         max_completion_length=1024,
         learning_rate=5e-6,
         beta=0.04,
@@ -44,7 +48,7 @@ def get_grpo_config(
         logging_steps=10,
         save_steps=200,
         save_total_limit=3,
-        report_to="wandb",
+        report_to=report_to,
         bf16=True,
         seed=1337,
     )
