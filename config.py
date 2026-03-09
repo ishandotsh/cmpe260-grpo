@@ -20,8 +20,10 @@ def get_grpo_config(
     output_dir: str | None = None,
     wandb_project: str | None = None,
     max_steps: int = -1,
+    run_name: str | None = None,
 ) -> GRPOConfig:
-    run_name = f"grpo-{sampling}"
+    if run_name is None:
+        run_name = f"grpo-{sampling}"
     if output_dir is None:
         output_dir = f"./output-{sampling}"
     if wandb_project is None:

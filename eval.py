@@ -39,9 +39,130 @@ def generate_completion(model, tokenizer, messages, max_new_tokens, temperature)
     return tokenizer.decode(completion_tokens, skip_special_tokens=True)
 
 
+def _checkpoint_step(checkpoint_path):
+    name = checkpoint_path.name
+    if name.startswith("checkpoint-"):
+        try:
+            return int(name.split("-")[-1])
+        except ValueError:
+            return -1
+    return -1
+
+
+def _find_checkpoints(checkpoint_root):
+    checkpoint_root = Path(checkpoint_root)
+    if not checkpoint_root.exists() or not checkpoint_root.is_dir():
+        return []
+    return sorted(
+        [path for path in checkpoint_root.iterdir() if path.is_dir() and path.name.startswith("checkpoint-")],
+        key=_checkpoint_step,
+    )
+
+
+def _score_checkpoint(
+    checkpoint_path,
+    eval_examples,
+    max_new_tokens,
+    temperature,
+):
+    model = AutoModelForCausalLM.from_pretrained(
+        str(checkpoint_path),
+        torch_dtype="auto",
+        device_map="auto",
+        attn_implementation="sdpa",
+    )
+    tokenizer = AutoTokenizer.from_pretrained(str(checkpoint_path), padding_side="left")
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    correct = 0.0
+    for example in eval_examples:
+        completion = generate_completion(
+            model=model,
+            tokenizer=tokenizer,
+            messages=example["prompt"],
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+        )
+        correct += check_answer(completion, example["solution"])
+
+    total = len(eval_examples)
+    accuracy = (correct / total) if total else 0.0
+
+    # Explicit cleanup before loading the next checkpoint.
+    del model
+    del tokenizer
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+
+    return accuracy
+
+
+def select_checkpoint(
+    checkpoint_root,
+    strategy,
+    requested_step,
+    selection_examples,
+    selection_max_new_tokens,
+    temperature,
+    selection_last_k,
+):
+    checkpoints = _find_checkpoints(checkpoint_root)
+    if not checkpoints:
+        return None, []
+
+    if strategy == "latest":
+        return checkpoints[-1], []
+
+    if strategy == "step":
+        for checkpoint in checkpoints:
+            if _checkpoint_step(checkpoint) == requested_step:
+                return checkpoint, []
+        raise ValueError(f"Requested checkpoint step {requested_step} was not found under {checkpoint_root}")
+
+    # strategy == "best"
+    candidates = checkpoints[-selection_last_k:] if selection_last_k > 0 else checkpoints
+    scored = []
+    best_checkpoint = None
+    best_accuracy = -1.0
+    for checkpoint in candidates:
+        step = _checkpoint_step(checkpoint)
+        print(f"Scoring checkpoint {checkpoint.name} on {len(selection_examples)} samples...")
+        accuracy = _score_checkpoint(
+            checkpoint_path=checkpoint,
+            eval_examples=selection_examples,
+            max_new_tokens=selection_max_new_tokens,
+            temperature=temperature,
+        )
+        scored.append({"checkpoint": str(checkpoint.resolve()), "step": step, "accuracy": accuracy})
+        if accuracy > best_accuracy or (accuracy == best_accuracy and step > _checkpoint_step(best_checkpoint)):
+            best_accuracy = accuracy
+            best_checkpoint = checkpoint
+
+    return best_checkpoint, scored
+
+
 def main():
     parser = argparse.ArgumentParser(description="Evaluate a trained checkpoint on MATH-500")
-    parser.add_argument("--model_path", type=str, required=True, help="Path or model id to evaluate")
+    parser.add_argument("--model_path", type=str, default=None, help="Path or model id to evaluate")
+    parser.add_argument("--run_dir", type=str, default=None, help="Run folder with /checkpoints and /eval subfolders")
+    parser.add_argument("--checkpoint_select", choices=["best", "latest", "step"], default="best")
+    parser.add_argument("--checkpoint_step", type=int, default=None, help="Required when --checkpoint_select step")
+    parser.add_argument("--checkpoint_selection_samples", type=int, default=25)
+    parser.add_argument("--checkpoint_selection_max_new_tokens", type=int, default=256)
+    parser.add_argument(
+        "--checkpoint_selection_last_k",
+        type=int,
+        default=5,
+        help="When selecting best checkpoint, evaluate only the most recent K checkpoints",
+    )
+    parser.add_argument(
+        "--allow_external_model",
+        action="store_true",
+        help="Allow direct HF model ids when sampling is random/stratified",
+    )
     parser.add_argument(
         "--sampling",
         choices=["random", "stratified", "unknown"],
@@ -65,7 +186,58 @@ def main():
 
     torch.manual_seed(args.seed)
 
-    resolved_model_path = str(Path(args.model_path).resolve()) if Path(args.model_path).exists() else args.model_path
+    run_dir = Path(args.run_dir) if args.run_dir else None
+    if run_dir:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        if args.model_path is None:
+            args.model_path = str(run_dir / "checkpoints")
+    if args.model_path is None:
+        raise ValueError("Provide --model_path or --run_dir")
+
+    model_path_obj = Path(args.model_path)
+    if run_dir is None and model_path_obj.exists() and model_path_obj.is_dir() and model_path_obj.name == "checkpoints":
+        run_dir = model_path_obj.parent
+
+    if (
+        args.sampling in {"random", "stratified"}
+        and run_dir is None
+        and not model_path_obj.exists()
+        and not args.allow_external_model
+    ):
+        raise ValueError(
+            "Refusing to evaluate external model id for a sampling run. "
+            "Use --run_dir (or local checkpoint path), or pass --allow_external_model to override."
+        )
+
+    checkpoint_selection_scores = []
+    selected_checkpoint = None
+    if model_path_obj.exists() and model_path_obj.is_dir() and model_path_obj.name == "checkpoints":
+        if args.checkpoint_select == "step" and args.checkpoint_step is None:
+            raise ValueError("--checkpoint_step is required when --checkpoint_select step")
+
+        selection_dataset = load_math500()
+        selection_count = min(args.checkpoint_selection_samples, len(selection_dataset))
+        selection_examples = [selection_dataset[i] for i in range(selection_count)]
+
+        selected_checkpoint, checkpoint_selection_scores = select_checkpoint(
+            checkpoint_root=model_path_obj,
+            strategy=args.checkpoint_select,
+            requested_step=args.checkpoint_step,
+            selection_examples=selection_examples,
+            selection_max_new_tokens=args.checkpoint_selection_max_new_tokens,
+            temperature=args.temperature,
+            selection_last_k=args.checkpoint_selection_last_k,
+        )
+        if selected_checkpoint is None:
+            if args.checkpoint_select == "step":
+                raise ValueError(f"No checkpoints found under {model_path_obj}")
+            print(f"No checkpoint-* folders found under {model_path_obj}; using root model files.")
+        else:
+            print(f"Selected checkpoint: {selected_checkpoint}")
+            args.model_path = str(selected_checkpoint)
+            model_path_obj = selected_checkpoint
+
+    resolved_model_path = str(model_path_obj.resolve()) if model_path_obj.exists() else args.model_path
 
     model = AutoModelForCausalLM.from_pretrained(
         args.model_path,
@@ -122,6 +294,10 @@ def main():
             "seed": args.seed,
             "model_name": getattr(model.config, "_name_or_path", MODEL_NAME),
             "checkpoint_path": resolved_model_path,
+            "checkpoint_select_strategy": args.checkpoint_select,
+            "selected_checkpoint_step": _checkpoint_step(model_path_obj) if model_path_obj.exists() else None,
+            "checkpoint_selection_scores": checkpoint_selection_scores,
+            "run_dir": str(run_dir.resolve()) if run_dir else None,
             "commit_hash": get_git_commit_hash(),
             "eval_dataset": EVAL_DATASET,
             "num_samples": len(records),
@@ -133,7 +309,12 @@ def main():
         "records": records,
     }
 
-    output_path = Path(args.output_json) if args.output_json else Path(args.model_path) / "eval_math500.json"
+    if args.output_json:
+        output_path = Path(args.output_json)
+    elif run_dir:
+        output_path = run_dir / "eval" / f"math500_ns{len(records)}_tok{args.max_new_tokens}.json"
+    else:
+        output_path = Path(args.model_path) / "eval_math500.json"
     output_path = write_json(output_path, artifact)
     print(f"Saved eval artifact to {output_path}")
 

@@ -4,6 +4,7 @@ uv run python analyze.py --random_eval ./output-random/eval_math500.json --strat
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from reporting import get_git_commit_hash, write_json
@@ -75,8 +76,9 @@ def main():
     parser = argparse.ArgumentParser(description="Compare random vs stratified eval artifacts")
     parser.add_argument("--random_eval", type=str, required=True)
     parser.add_argument("--stratified_eval", type=str, required=True)
-    parser.add_argument("--output_json", type=str, default="./analysis/comparison.json")
-    parser.add_argument("--plot_path", type=str, default="./analysis/accuracy_comparison.png")
+    parser.add_argument("--experiment_dir", type=str, default=None, help="Directory to store analysis artifacts")
+    parser.add_argument("--output_json", type=str, default=None)
+    parser.add_argument("--plot_path", type=str, default=None)
     parser.add_argument("--no_plot", action="store_true")
     parser.add_argument("--wandb_project", type=str, default=DEFAULT_WANDB_PROJECT)
     parser.add_argument("--disable_wandb", action="store_true")
@@ -98,11 +100,28 @@ def main():
         "comparison": comparison,
     }
 
-    output_path = write_json(args.output_json, payload)
+    random_eval_path = Path(args.random_eval).resolve()
+    stratified_eval_path = Path(args.stratified_eval).resolve()
+
+    if args.experiment_dir:
+        experiment_dir = Path(args.experiment_dir).resolve()
+    else:
+        common_root = Path(os.path.commonpath([str(random_eval_path), str(stratified_eval_path)]))
+        experiment_dir = common_root
+
+    if args.output_json:
+        output_json_path = Path(args.output_json)
+    else:
+        output_json_path = experiment_dir / "analysis" / "comparison.json"
+
+    output_path = write_json(output_json_path, payload)
     print(f"Saved comparison artifact to {output_path}")
 
     if not args.no_plot:
-        plot_path = Path(args.plot_path)
+        if args.plot_path:
+            plot_path = Path(args.plot_path)
+        else:
+            plot_path = experiment_dir / "analysis" / "accuracy_comparison.png"
         _save_plot(comparison, plot_path)
         print(f"Saved accuracy plot to {plot_path}")
 

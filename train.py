@@ -15,6 +15,7 @@ from trl import GRPOTrainer
 
 from config import MODEL_NAME, WANDB_PROJECT, get_grpo_config
 from data import StratifiedDifficultySampler, load_competition_math
+from experiment_layout import build_run_name, ensure_run_dirs, get_run_paths
 from reporting import get_git_commit_hash, summarize_grouped_values, write_json
 from reward import DifficultyRewardTracker, make_reward_fn
 
@@ -63,30 +64,73 @@ def main():
         required=True,
         help="Sampling strategy: random (mixed difficulty) or stratified (same difficulty per batch)",
     )
+    parser.add_argument("--model_name", type=str, default=MODEL_NAME)
+    parser.add_argument("--experiments_root", type=str, default="./experiments")
+    parser.add_argument("--run_name", type=str, default=None, help="Optional explicit run folder name")
+    parser.add_argument("--run_tag", type=str, default=None, help="Optional short suffix for run naming")
     parser.add_argument("--output_dir", type=str, default=None)
     parser.add_argument("--wandb_project", type=str, default=WANDB_PROJECT)
     parser.add_argument("--log_every", type=int, default=50, help="Log reward stats every N train steps")
     parser.add_argument("--max_steps", type=int, default=-1, help="Override max training steps (-1 = full epochs)")
+    parser.add_argument(
+        "--min_steps_before_eval",
+        type=int,
+        default=200,
+        help="Warn if training ends before this many steps",
+    )
+    parser.add_argument("--push_to_hub", action="store_true")
     args = parser.parse_args()
+
+    seed = 1337
+    if args.run_name:
+        run_name = args.run_name
+    else:
+        run_name = build_run_name(
+            sampling=args.sampling,
+            model_name=args.model_name,
+            seed=seed,
+            run_tag=args.run_tag,
+        )
+
+    if args.output_dir:
+        checkpoint_dir = Path(args.output_dir)
+        run_dir = checkpoint_dir.parent if checkpoint_dir.name == "checkpoints" else checkpoint_dir
+        run_paths = {
+            "run_dir": run_dir,
+            "checkpoint_dir": checkpoint_dir,
+            "train_dir": run_dir / "train",
+            "eval_dir": run_dir / "eval",
+            "analysis_dir": run_dir / "analysis",
+        }
+    else:
+        run_paths = get_run_paths(args.experiments_root, run_name)
+        checkpoint_dir = run_paths["checkpoint_dir"]
+        run_dir = run_paths["run_dir"]
+    ensure_run_dirs(run_paths)
+    print(f"Run directory: {run_dir.resolve()}")
 
     # ---- Config ----
     grpo_config = get_grpo_config(
         sampling=args.sampling,
-        output_dir=args.output_dir,
+        output_dir=str(checkpoint_dir),
         wandb_project=args.wandb_project,
         max_steps=args.max_steps,
+        run_name=run_name,
     )
-    output_dir = Path(grpo_config.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
 
     run_metadata = {
+        "run_name": run_name,
+        "run_dir": str(run_dir.resolve()),
         "sampling": args.sampling,
         "seed": grpo_config.seed,
-        "model_name": MODEL_NAME,
-        "checkpoint_path": str(output_dir.resolve()),
+        "model_name": args.model_name,
+        "checkpoint_path": str(checkpoint_dir.resolve()),
+        "eval_dir": str(run_paths["eval_dir"].resolve()),
+        "analysis_dir": str(run_paths["analysis_dir"].resolve()),
+        "min_steps_before_eval": args.min_steps_before_eval,
         "commit_hash": get_git_commit_hash(),
     }
-    metadata_path = write_json(output_dir / "train_run_metadata.json", run_metadata)
+    metadata_path = write_json(run_paths["train_dir"] / "train_run_metadata.json", run_metadata)
     print(f"Saved run metadata to {metadata_path}")
 
     # ---- W&B ----
@@ -98,12 +142,12 @@ def main():
 
     # ---- Model ----
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
+        args.model_name,
         torch_dtype=torch.bfloat16,
         device_map="auto",
         attn_implementation="sdpa",
     )
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, padding_side="left")
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name, padding_side="left")
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -145,9 +189,30 @@ def main():
     trainer.save_model(grpo_config.output_dir)
     print(f"Model saved to {grpo_config.output_dir}")
 
-    repo_name = Path(grpo_config.output_dir).name
-    print(f"Pushing model to HuggingFace Hub: {repo_name}...")
-    trainer.push_to_hub(repo_name)
+    checkpoint_root = Path(grpo_config.output_dir)
+    checkpoint_folders = sorted(
+        [p for p in checkpoint_root.iterdir() if p.is_dir() and p.name.startswith("checkpoint-")]
+    )
+    training_summary = {
+        "run_name": run_name,
+        "global_step": trainer.state.global_step,
+        "save_steps": grpo_config.save_steps,
+        "num_checkpoints": len(checkpoint_folders),
+        "checkpoint_paths": [str(p.resolve()) for p in checkpoint_folders],
+    }
+    training_summary_path = write_json(run_paths["train_dir"] / "training_summary.json", training_summary)
+    print(f"Saved training summary to {training_summary_path}")
+    if trainer.state.global_step < args.min_steps_before_eval:
+        print(
+            f"Warning: training ended at step {trainer.state.global_step}, below "
+            f"--min_steps_before_eval={args.min_steps_before_eval}. "
+            "Eval may underestimate trained performance."
+        )
+
+    if args.push_to_hub:
+        repo_name = run_name
+        print(f"Pushing model to HuggingFace Hub: {repo_name}...")
+        trainer.push_to_hub(repo_name)
 
 
 if __name__ == "__main__":
