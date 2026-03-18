@@ -1,0 +1,33 @@
+{
+  "checkpoint": "manavgoel4/output-stratified-binary",
+  "overall_accuracy": 0.438,
+  "total_correct": 219,
+  "total_problems": 500,
+  "per_difficulty": {
+    "level_1": {
+      "correct": 35,
+      "total": 43,
+      "accuracy": 0.814
+    },
+    "level_2": {
+      "correct": 52,
+      "total": 90,
+      "accuracy": 0.5778
+    },
+    "level_3": {
+      "correct": 56,
+      "total": 105,
+      "accuracy": 0.5333
+    },
+    "level_4": {
+      "correct": 53,
+      "total": 128,
+      "accuracy": 0.4141
+    },
+    "level_5": {
+      "correct": 23,
+      "total": 134,
+      "accuracy": 0.1716
+    }
+  }
+}

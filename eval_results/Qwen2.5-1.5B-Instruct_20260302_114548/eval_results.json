@@ -1,0 +1,33 @@
+{
+  "checkpoint": "Qwen/Qwen2.5-1.5B-Instruct",
+  "overall_accuracy": 0.404,
+  "total_correct": 202,
+  "total_problems": 500,
+  "per_difficulty": {
+    "level_1": {
+      "correct": 31,
+      "total": 43,
+      "accuracy": 0.7209
+    },
+    "level_2": {
+      "correct": 47,
+      "total": 90,
+      "accuracy": 0.5222
+    },
+    "level_3": {
+      "correct": 53,
+      "total": 105,
+      "accuracy": 0.5048
+    },
+    "level_4": {
+      "correct": 48,
+      "total": 128,
+      "accuracy": 0.375
+    },
+    "level_5": {
+      "correct": 23,
+      "total": 134,
+      "accuracy": 0.1716
+    }
+  }
+}

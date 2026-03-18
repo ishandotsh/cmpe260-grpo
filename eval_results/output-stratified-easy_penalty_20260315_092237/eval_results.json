@@ -1,0 +1,33 @@
+{
+  "checkpoint": "manavgoel4/output-stratified-easy_penalty",
+  "overall_accuracy": 0.436,
+  "total_correct": 218,
+  "total_problems": 500,
+  "per_difficulty": {
+    "level_1": {
+      "correct": 35,
+      "total": 43,
+      "accuracy": 0.814
+    },
+    "level_2": {
+      "correct": 54,
+      "total": 90,
+      "accuracy": 0.6
+    },
+    "level_3": {
+      "correct": 57,
+      "total": 105,
+      "accuracy": 0.5429
+    },
+    "level_4": {
+      "correct": 48,
+      "total": 128,
+      "accuracy": 0.375
+    },
+    "level_5": {
+      "correct": 24,
+      "total": 134,
+      "accuracy": 0.1791
+    }
+  }
+}

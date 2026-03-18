@@ -1,0 +1,33 @@
+{
+  "checkpoint": "manavgoel4/output-random-difficulty_weighted",
+  "overall_accuracy": 0.428,
+  "total_correct": 214,
+  "total_problems": 500,
+  "per_difficulty": {
+    "level_1": {
+      "correct": 33,
+      "total": 43,
+      "accuracy": 0.7674
+    },
+    "level_2": {
+      "correct": 51,
+      "total": 90,
+      "accuracy": 0.5667
+    },
+    "level_3": {
+      "correct": 54,
+      "total": 105,
+      "accuracy": 0.5143
+    },
+    "level_4": {
+      "correct": 48,
+      "total": 128,
+      "accuracy": 0.375
+    },
+    "level_5": {
+      "correct": 28,
+      "total": 134,
+      "accuracy": 0.209
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "checkpoint": "manavgoel4/output-curriculum-easy_penalty",
+  "overall_accuracy": 0.43,
+  "total_correct": 215,
+  "total_problems": 500,
+  "per_difficulty": {
+    "level_1": {
+      "correct": 33,
+      "total": 43,
+      "accuracy": 0.7674
+    },
+    "level_2": {
+      "correct": 50,
+      "total": 90,
+      "accuracy": 0.5556
+    },
+    "level_3": {
+      "correct": 55,
+      "total": 105,
+      "accuracy": 0.5238
+    },
+    "level_4": {
+      "correct": 52,
+      "total": 128,
+      "accuracy": 0.4062
+    },
+    "level_5": {
+      "correct": 25,
+      "total": 134,
+      "accuracy": 0.1866
+    }
+  }
+}
